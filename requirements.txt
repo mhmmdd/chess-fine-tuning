@@ -1,0 +1,14 @@
+# Unsloth for efficient fine-tuning
+unsloth[torch,xformers]
+
+# Hugging Face libraries
+transformers
+datasets
+trl
+accelerate
+
+# PyTorch (unsloth usually handles this, but specifying is good practice)
+torch
+
+# For PGN parsing if needed in the future, though not used in the current script
+python-chess
