@@ -5,10 +5,18 @@ from trl import SFTTrainer
 from transformers import TrainingArguments
 import argparse
 
+# We define the formatting function that will be used by the SFTTrainer
+# This function takes an example and formats it into the prompt style the model expects.
+def formatting_prompts_func(example):
+    # The 'conversations' field is already a list of dictionaries.
+    # We just need to ensure the tokenizer can process it.
+    # The tokenizer will apply the chat template.
+    return example["conversations"]
+
 def main():
     parser = argparse.ArgumentParser(description="Fine-tune Gemma 3 270M on the ChessInstruct dataset using Unsloth.")
     parser.add_argument("--dataset_path", type=str, default="data/chess_instruct_chatml.json", help="Path to the prepared dataset.")
-    parser.add_argument("--model_name", type=str, default="unsloth/gemma-3-270m-instruct", help="The model to fine-tune.")
+    parser.add_argument("--model_name", type=str, default="unsloth/gemma-3-270m-it", help="The model to fine-tune.")
     parser.add_argument("--output_dir", type=str, default="models/gemma-3-270m-chess", help="Directory to save the fine-tuned model.")
     parser.add_argument("--max_seq_length", type=int, default=2048, help="Maximum sequence length for the model.")
     parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs.")
@@ -44,7 +52,7 @@ def main():
         model=model,
         tokenizer=tokenizer,
         train_dataset=dataset,
-        dataset_text_field="conversations", # The field containing our ChatML data
+        formatting_func=formatting_prompts_func, # Use formatting_func instead of dataset_text_field
         max_seq_length=args.max_seq_length,
         dataset_num_proc=2,
         packing=False,
