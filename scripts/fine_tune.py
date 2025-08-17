@@ -5,14 +5,6 @@ from trl import SFTTrainer
 from transformers import TrainingArguments
 import argparse
 
-# We define the formatting function that will be used by the SFTTrainer
-# This function takes an example and formats it into the prompt style the model expects.
-def formatting_prompts_func(example):
-    # The 'conversations' field is already a list of dictionaries.
-    # We just need to ensure the tokenizer can process it.
-    # The tokenizer will apply the chat template.
-    return example["conversations"]
-
 def main():
     parser = argparse.ArgumentParser(description="Fine-tune Gemma 3 270M on the ChessInstruct dataset using Unsloth.")
     parser.add_argument("--dataset_path", type=str, default="data/chess_instruct_chatml.json", help="Path to the prepared dataset.")
@@ -23,18 +15,31 @@ def main():
     parser.add_argument("--batch_size", type=int, default=2, help="Training batch size.")
     args = parser.parse_args()
 
-    # Load the dataset
+    # 1) Dataset yükle
     dataset = load_dataset("json", data_files=args.dataset_path, split="train")
 
-    # Load the model and tokenizer using Unsloth
+    # 2) Model + tokenizer (Unsloth)
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=args.model_name,
         max_seq_length=args.max_seq_length,
-        dtype=None,  # None will auto-detect the best dtype
+        dtype=None,
         load_in_4bit=True,
     )
 
-    # Configure the model for LoRA fine-tuning
+    # 3) conversations -> text (tek bir string) dönüşümü
+    #    (Batched map ile düz string listesi üretip sadece "text" kolonunu bırakıyoruz)
+    orig_cols = dataset.column_names
+    def to_text(batch):
+        # batch["conversations"] = list[ list[{"role":..., "content":...}, ...] ]
+        texts = [
+            tokenizer.apply_chat_template(conv, tokenize=False, add_generation_prompt=False)
+            for conv in batch["conversations"]
+        ]
+        return {"text": texts}
+
+    dataset = dataset.map(to_text, batched=True, remove_columns=orig_cols)
+
+    # 4) LoRA ayarı
     model = FastLanguageModel.get_peft_model(
         model,
         r=16,
@@ -47,14 +52,14 @@ def main():
         max_seq_length=args.max_seq_length,
     )
 
-    # Set up the trainer
+    # 5) Trainer (artık dataset_text_field="text" kullanıyoruz; formatting_func YOK)
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=dataset,
-        formatting_func=formatting_prompts_func, # Use formatting_func instead of dataset_text_field
+        dataset_text_field="text",
         max_seq_length=args.max_seq_length,
-        dataset_num_proc=2,
+        dataset_num_proc=1,   # WSL/Windows'ta çoklu süreç bazen sorun çıkarıyor; istersen sonra artır
         packing=False,
         args=TrainingArguments(
             per_device_train_batch_size=args.batch_size,
@@ -65,7 +70,7 @@ def main():
             fp16=not torch.cuda.is_bf16_supported(),
             bf16=torch.cuda.is_bf16_supported(),
             logging_steps=1,
-            optim="adamw_8bit",
+            optim="adamw_8bit",     # bitsandbytes yoksa "adamw_torch_fused" deneyin
             weight_decay=0.01,
             lr_scheduler_type="linear",
             seed=42,
@@ -78,8 +83,12 @@ def main():
     print("Fine-tuning complete.")
 
     print(f"Saving model to {args.output_dir}")
-    model.save_pretrained(args.output_dir)
+    model.save_pretrained(args.output_dir)   # LoRA adapter kaydı
     tokenizer.save_pretrained(args.output_dir)
+
+    # İsteğe bağlı: LoRA'yı birleştirip tek parça fp16 model de çıkarabilirsiniz:
+    # model.save_pretrained_merged(args.output_dir + "-merged", tokenizer, save_method="merged_16bit")
+
     print("Model saved successfully.")
 
 if __name__ == "__main__":
